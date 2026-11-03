@@ -1,0 +1,7 @@
+.secrets
+logs/
+.venv/
+__pycache__/
+*.db*
+pages/
+OPEN_LINK.txt
