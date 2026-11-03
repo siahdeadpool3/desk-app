@@ -33,7 +33,7 @@ async def handle(item):
     if mint in pushed or c.execute("SELECT 1 FROM positions WHERE mint=? AND status!='closed'", (mint,)).fetchone(): return
     pushed.add(mint)
     p = (await net.dex_pairs([mint])).get(mint); f = net.pair_fields(p) if p else {}
-    price = f.get("priceUsd"); base = item.get("pair") or {}
+    price = f.get("priceUsd"); base = item.get("pair") or {}; scan = item["scan"]
     def done(status, reason, sz=0, cap=None):
         j = {"agent": "executor", "mint": mint, "signalPrice": price, "sizeUsd": sz, "stackPct": round(100 * sz / stack, 2) if stack else 0,
              "link": link, "mode": mode, "status": status, "reason": reason}
@@ -43,33 +43,52 @@ async def handle(item):
         return j
     stack = stack_now(c)
     if not price: return done("skipped", "no price")
-    if base.get("liquidityUsd") and (f.get("liquidityUsd") or 0) < base["liquidityUsd"] * (1 - S("recheck_liq_drop_pct") / 100): return done("skipped", "liquidity dropped")
-    if base.get("priceUsd") and price > base["priceUsd"] * (1 + S("recheck_price_up_pct") / 100): return done("skipped", "price ran")
+    r = recheck(scan.get("liquidityUsd"), f.get("liquidityUsd"), base.get("priceUsd"), price, S)
+    if r: return done("skipped", r)
     sz, cap, status, reason = size(stack, open_usd(c), f.get("liquidityUsd"), S)
     if status == "skipped": return done("skipped", reason, 0, cap)
     pct = round(100 * sz / stack, 1)
-    text = f"Buy {name} · ${sz:.2f} · {pct}% of stack · score {item['analysis']['score']}"
     pid = c.execute("INSERT INTO positions(mint,name,mode,entry_price,size_usd,peak,stop_pct,opened_at,status,link) VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (mint, name, mode, price, sz, price, config.get("risk.stop_pct", c), bus.iso(), "pending", link)).lastrowid
-    ok = await telegram.push(text, [[("Buy on FOMO", link)], [("Bought", f"bought:{pid}")]], mode=mode)
+    text, btn = push_text(name, sz, pct, item["analysis"]["score"], c), buttons(link, pid)
+    ok = await telegram.push(text, btn, mode=mode)
     trades += 1
     if mode == "PAPER":
         await asyncio.sleep(1.2)
-        c.execute("UPDATE positions SET status='open', opened_at=? WHERE id=?", (bus.iso(), pid))
-        store.kv_set("paper_balance", stack)  # balance changes only on exit
-        store.activity("buy", f"Bought {name}", f"Executor · {bus.now().strftime('%H:%M')}Z", f"${sz:.2f} · {pct}% of stack", mint)
+        if c.execute("SELECT status FROM positions WHERE id=?", (pid,)).fetchone()[0] == "skipped": return done("skipped", "you tapped Skip", sz, cap)
+        fill(c, pid, name, sz, pct, mint)
+        if not ok: log.info(f"{mint} push failed")
         return done("bought", None if ok else "push failed", sz, cap)
     if not ok:
-        c.execute("DELETE FROM positions WHERE id=?", (pid,)); return done("skipped", "push failed", sz, cap)
-    await asyncio.sleep(S("confirm_window_min") * 60)
-    if c.execute("SELECT status FROM positions WHERE id=?", (pid,)).fetchone()[0] == "pending":
-        c.execute("DELETE FROM positions WHERE id=?", (pid,)); return done("missed", "no tap", sz, cap)
+        log.info(f"{mint} push failed"); c.execute("DELETE FROM positions WHERE id=?", (pid,)); return done("skipped", "push failed", sz, cap)
+    for _ in range(int(S("confirm_window_min") * 60)):
+        await asyncio.sleep(1)
+        st = c.execute("SELECT status FROM positions WHERE id=?", (pid,)).fetchone()
+        if not st or st[0] != "pending": break
+    st = c.execute("SELECT status FROM positions WHERE id=?", (pid,)).fetchone()
+    if st and st[0] == "pending":
+        c.execute("DELETE FROM positions WHERE id=?", (pid,)); return done("missed", "missed", sz, cap)
+    if st and st[0] == "skipped": c.execute("DELETE FROM positions WHERE id=?", (pid,)); return done("skipped", "you tapped Skip", sz, cap)
     return done("bought", None, sz, cap)
+def recheck(scan_liq, liq, analyst_price, price, S):
+    if scan_liq and (liq or 0) < scan_liq * (1 - S("recheck_liq_drop_pct") / 100): return "liquidity dropping"
+    if analyst_price and price > analyst_price * (1 + S("recheck_price_up_pct") / 100): return "ran before the push"
+    return None
+def push_text(name, sz, pct, score, c=None):
+    return (f"Buy {name} · ${sz:.2f} · {pct:g}% of stack\n"
+            f"Auditor 8/8 · Analyst {score} · stop -{config.get('risk.stop_pct', c):g}% · trail {config.get('risk.trail_pct', c):g}%")
+def buttons(link, pid): return [[("Buy on FOMO", link)], [("Bought", f"bought:{pid}"), ("Skip", f"skip:{pid}")]]
+def fill(c, pid, name, sz, pct, mint):
+    c.execute("UPDATE positions SET status='open', opened_at=? WHERE id=?", (bus.iso(), pid))
+    store.activity("buy", f"Bought {name}", f"Executor · {bus.now().strftime('%H:%M')}", f"${sz:.2f} · {pct:g}% of stack", mint)
+def skip_tap(pid):
+    c = store.c(); r = c.execute("SELECT * FROM positions WHERE id=? AND status='pending'", (pid,)).fetchone()
+    if not r: return None
+    c.execute("UPDATE positions SET status='skipped' WHERE id=?", (pid,)); store.skip(r["mint"], "executor", "you tapped Skip"); return r
 def confirm_bought(pid):
     c = store.c(); r = c.execute("SELECT * FROM positions WHERE id=? AND status='pending'", (pid,)).fetchone()
     if not r: return None
-    c.execute("UPDATE positions SET status='open', opened_at=? WHERE id=?", (bus.iso(), pid))
-    store.activity("buy", f"Bought {r['name']}", f"Executor · {bus.now().strftime('%H:%M')}Z", f"${r['size_usd']:.2f}", r["mint"]); return r
+    fill(c, pid, r["name"], r["size_usd"], round(100 * r["size_usd"] / stack_now(c), 1), r["mint"]); return r
 async def run():
     while True:
         item = await bus.executor.get(); store.beat("executor")

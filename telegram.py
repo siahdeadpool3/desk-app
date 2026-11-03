@@ -58,7 +58,8 @@ async def handle_text(t):
         if verb == "buy":
             pos = c.execute("SELECT * FROM positions WHERE mint=? ORDER BY id DESC LIMIT 1", (mint,)).fetchone()
             if pos:
-                return await push(f"Buy {name} · ${pos['size_usd']:.2f}", [[("Buy on FOMO", cu(mint))], [("Bought", f"bought:{pos['id']}")]], mode=pos["mode"])
+                from agents import executor as ex
+                return await push(ex.push_text(name, pos['size_usd'], round(100*pos['size_usd']/ex.stack_now(c),1), "?", c), ex.buttons(cu(mint), pos['id']), mode=pos["mode"])
             from agents import auditor
             scan = c.execute("SELECT json FROM scans WHERE mint=? ORDER BY id DESC LIMIT 1", (mint,)).fetchone()
             scan = json.loads(scan[0]) if scan else {"mint": mint, "pool": None}
@@ -126,6 +127,7 @@ async def on_callback(cb):
     data = cb.get("data", "")
     from agents import executor, risk
     if data.startswith("bought:"): r = executor.confirm_bought(int(data.split(":")[1])); msg = "Position opened" if r else "Already handled"
+    elif data.startswith("skip:"): r = executor.skip_tap(int(data.split(":")[1])); msg = "Skipped for tonight" if r else "Already handled"
     elif data.startswith("sold:"): risk.confirm_sold(int(data.split(":")[1])); msg = "Position closed"
     else: msg = "?"
     if not DRY:

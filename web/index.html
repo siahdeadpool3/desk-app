@@ -1,15 +1,10 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0b0d12"><link rel="manifest" href="manifest.json"><link rel="apple-touch-icon" href="icons/icon.svg">
-<title>Desk</title><style>body{margin:0;background:#0b0d12;color:#e8ecf3;font:15px -apple-system,system-ui,sans-serif;padding:20px}
-.card{background:#141821;border-radius:16px;padding:16px;margin:12px 0}.pill{display:inline-block;padding:2px 8px;border-radius:99px;background:#22314a;color:#7fd3ff;font-size:12px}
-.big{font-size:32px;font-weight:700}.muted{color:#8a93a6}.err{color:#ff6b6b}</style></head><body>
-<div class="pill" id="mode">…</div><div class="card"><div class="muted">Balance</div><div class="big" id="bal">—</div><div class="muted" id="ts"></div></div>
-<div class="card muted" id="msg">Loading…</div>
-<script>
-const h=new URLSearchParams(location.hash.slice(1));const d=h.get('d')||localStorage.getItem('d');if(h.get('d')){localStorage.setItem('d',d);history.replaceState(null,'',location.pathname)}
-async function tick(){if(!d){msg.textContent='Open the app with your private link.';return}
-try{const r=await fetch('d/'+d+'/state.json?'+Date.now(),{cache:'no-store'});if(!r.ok)throw r.status;const s=await r.json();
-mode.textContent=s.mode;bal.textContent='$'+s.balance.toFixed(2);ts.textContent='updated '+new Date(s.ts).toLocaleTimeString();msg.textContent=s.note||'Desk online'}
-catch(e){msg.innerHTML='<span class="err">Can\'t reach the desk ('+e+')</span>'}}
-tick();setInterval(tick,15000);
-</script></body></html>
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Desk"><meta name="theme-color" content="#07090d">
+<link rel="manifest" href="manifest.json"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css"><title>Desk</title></head><body>
+<header id="top"><div class="brand">Desk</div><div id="badge" class="badge">PAPER</div></header>
+<main id="view"></main>
+<nav id="tabs"><a data-t="home" href="#/home">Home</a><a data-t="agents" href="#/agents">Agents</a><a data-t="activity" href="#/activity">Activity</a><a data-t="account" href="#/account">Account</a></nav>
+<script src="chart.js"></script><script src="app.js"></script></body></html>
