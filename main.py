@@ -30,9 +30,33 @@ def publish(data: dict):
     _last = h; return True
 def state_snapshot(balance, mode="PAPER", note=None):
     return {"state.json":{"mode":mode,"balance":round(balance,2),"ts":datetime.datetime.now(datetime.timezone.utc).isoformat(),"note":note}}
-if __name__ == "__main__":
-    bal = 200.0
+def full_snapshot():
+    import store, config, bus
+    from agents import scanner, auditor, executor
+    from agents.executor import stack_now
+    c = store.c(); q = lambda sql: [dict(r) for r in c.execute(sql)]
+    st = {"mode": config.get("desk.mode", c), "balance": round(stack_now(c), 2), "ts": bus.iso(),
+          "agents": {r["agent"]: {"ts": r["ts"], "paused": bool(r["paused"])} for r in q("SELECT * FROM heartbeats")},
+          "cards": {"scanner": {"pools": scanner.pools, "waiting": len(scanner.room)}, "auditor": {"taken": auditor.taken, "rejected": auditor.rejected},
+                    "executor": {"trades": executor.trades}},
+          "positions": q("SELECT * FROM positions WHERE status!='closed'"), "settings": config.all_settings(c)}
+    return {"state.json": st, "activity.json": q("SELECT * FROM activity ORDER BY id DESC LIMIT 200"),
+            "scans.json": q("SELECT mint,verdict,reason,liq,top10,h1,age_min,ts FROM scans ORDER BY id DESC LIMIT 300"),
+            "audits.json": [json.loads(r["json"]) for r in q("SELECT json FROM audits ORDER BY id DESC LIMIT 100")],
+            "events.json": list(bus.events)}
+async def publisher():
+    import asyncio
     while True:
-        try: publish(state_snapshot(bal)); 
-        except Exception as e: print("publish failed", e, file=sys.stderr, flush=True)
-        time.sleep(15)
+        try: await asyncio.to_thread(publish, full_snapshot())
+        except Exception as e: print("publish failed", repr(e), file=sys.stderr, flush=True)
+        await asyncio.sleep(60)   # Pages builds take 30s-6min and soft-limit ~10/h; 60s approved
+async def amain():
+    import asyncio, bus, store, config, telegram
+    from agents import scanner, auditor, analyst, executor, risk
+    bus.init(); c = store.c()
+    c.execute("INSERT INTO nights(mode,started,start_balance) VALUES(?,?,?)", (config.get("desk.mode", c), bus.iso(), executor.stack_now(c)))
+    tc = executor.ticket_check(c)
+    if tc: await telegram.send(tc)
+    await asyncio.gather(scanner.run(), auditor.run(), analyst.run(), executor.run(), risk.run(), telegram.run(), publisher())
+if __name__ == "__main__":
+    import asyncio; asyncio.run(amain())

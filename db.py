@@ -1,5 +1,5 @@
 import sqlite3, os
-PATH = os.path.join(os.path.dirname(__file__), "desk.db")
+PATH = os.environ.get("DESK_DB") or os.path.join(os.path.dirname(__file__), "desk.db")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS coins(mint TEXT PRIMARY KEY,name TEXT,symbol TEXT,pool TEXT,creator TEXT,
   creator_balance REAL,migrated_at TEXT,signature TEXT,holders INTEGER,first_seen TEXT,h24_change REAL);
